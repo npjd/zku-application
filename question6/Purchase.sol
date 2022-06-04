@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.4;
+
 contract Purchase {
-    uint public value;
+    uint256 public value;
     address payable public seller;
     address payable public buyer;
-    uint public lastCallTimestamp;
+    uint256 public lastCallTimestamp;
 
-    enum State { Created, Locked, Release, Inactive }
+    enum State {
+        Created,
+        Locked,
+        Release,
+        Inactive
+    }
     // The state variable has a default value of the first member, `State.created`
     State public state;
 
@@ -24,38 +30,29 @@ contract Purchase {
     /// The provided value has to be even.
     error ValueNotEven();
 
-    error StateNotLocked();
-
     error TimeNotElapsed();
 
     modifier onlyBuyer() {
-        if (msg.sender != buyer)
-            revert OnlyBuyer();
+        if (msg.sender != buyer) revert OnlyBuyer();
         _;
     }
 
     modifier onlySeller() {
-        if (msg.sender != seller)
-            revert OnlySeller();
+        if (msg.sender != seller) revert OnlySeller();
         _;
     }
 
     modifier inState(State state_) {
-        if (state != state_)
-            revert InvalidState();
+        if (state != state_) revert InvalidState();
         _;
     }
 
-    modifier onlyStateLocked(State state_){
-        if (state_ != State.Locked){
-            revert StateNotLocked();
-        }
-        _;
-    }
-
-    modifier buyerOrFiveMinutes(){
-        if(msg.sender != buyer && block.timestamp < lastCallTimestamp + 5 minutes){
-            revert StateNotLocked();
+    modifier buyerOrFiveMinutes() {
+        if (
+            msg.sender != buyer &&
+            block.timestamp < lastCallTimestamp + 5 minutes
+        ) {
+            revert TimeNotElapsed();
         }
         _;
     }
@@ -71,18 +68,13 @@ contract Purchase {
     constructor() payable {
         seller = payable(msg.sender);
         value = msg.value / 2;
-        if ((2 * value) != msg.value)
-            revert ValueNotEven();
+        if ((2 * value) != msg.value) revert ValueNotEven();
     }
 
     /// Abort the purchase and reclaim the ether.
     /// Can only be called by the seller before
     /// the contract is locked.
-    function abort()
-        external
-        onlySeller
-        inState(State.Created)
-    {
+    function abort() external onlySeller inState(State.Created) {
         emit Aborted();
         state = State.Inactive;
         // We use transfer here directly. It is
@@ -98,57 +90,27 @@ contract Purchase {
     /// is called.
     function confirmPurchase()
         external
+        payable
         inState(State.Created)
         condition(msg.value == (2 * value))
-        payable
     {
         emit PurchaseConfirmed();
         buyer = payable(msg.sender);
         state = State.Locked;
+        lastCallTimestamp = block.timestamp;
     }
 
-    /// Confirm that you (the buyer) received the item.
-    /// This will release the locked ether.
-    function confirmReceived()
+    function completePurchase()
         external
-        onlyBuyer
+        buyerOrFiveMinutes
         inState(State.Locked)
     {
         emit ItemReceived();
-        // It is important to change the state first because
-        // otherwise, the contracts called using `send` below
-        // can call in again here.
-        state = State.Release;
-        lastCallTimestamp = block.timestamp;
-
-        buyer.transfer(value);
-    }
-
-    function completePurchase() external buyerOrFiveMinutes inState(State.Locked) {
-        emit ItemReceived();
         state = State.Release;
         buyer.transfer(value);
 
         emit SellerRefunded();
 
-        state = State.Inactive;
-
-        seller.transfer(3*value);
-    }
-
-
-
-    /// This function refunds the seller, i.e.
-    /// pays back the locked funds of the seller.
-    function refundSeller()
-        external
-        onlySeller
-        inState(State.Release)
-    {
-        emit SellerRefunded();
-        // It is important to change the state first because
-        // otherwise, the contracts called using `send` below
-        // can call in again here.
         state = State.Inactive;
 
         seller.transfer(3 * value);
